@@ -67,18 +67,82 @@ static const struct of_device_id jlt4013a_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, jlt4013a_of_match);
 
+/*
+ * Xiegu's own mode (stock firmware, kernel 5.8.9, panel-jlt4013a-pss): 14.616 MHz,
+ * 525 x 928, ~30 Hz. The 2022 mode (27.5 MHz, 542 x 843, 60 Hz) doubles the picture
+ * a few lines apart on newer panels, which take it only at this rate.
+ */
 static const struct drm_display_mode jlt4013a_default_display_mode = {
-	.clock = 27500,
- 	.hdisplay = 480,                /* x */
- 	.hsync_start = 480 + 38,        /* x + ri */
- 	.hsync_end = 480 + 38 + 12,     /* x + ri + hs */
- 	.htotal = 480 + 38 + 12 + 12,   /* x + ri + hs + le */
- 	.vdisplay = 800,                /* y */
- 	.vsync_start = 800 + 18,        /* y + lo */
- 	.vsync_end = 800 + 18 + 8,      /* y + lo + vs */
- 	.vtotal = 800 + 18 + 8 + 17,    /* y + lo + vs + up */
+	.clock = 14616,
+	.hdisplay = 480,
+	.hsync_start = 480 + 32,
+	.hsync_end = 480 + 32 + 11,
+	.htotal = 480 + 32 + 11 + 2,
+	.vdisplay = 800,
+	.vsync_start = 800 + 54,
+	.vsync_end = 800 + 54 + 41,
+	.vtotal = 800 + 54 + 41 + 33,
 	.width_mm = 52,
 	.height_mm = 86,
+};
+
+/*
+ * Xiegu's ST7701S init, from the stock U-Boot 2017.11 (19 Aug 2024): the stock kernel
+ * sends nothing and keeps what U-Boot set. { command, data length, data... }; a length
+ * of 0xff is a delay of data[0] ms. RGBCTRL (C3) stays at its default: the panel
+ * samples pixel data on the rising edge (bus_flags below).
+ */
+#define ST7701S_DELAY 0xff
+static const u8 jlt4013a_init_seq[][18] = {
+	{ ST7701S_SWRESET, 0 },
+	{ ST7701S_DELAY, 0xff, 50 },
+	{ ST7701S_SLPOUT, 0 },
+	{ ST7701S_DELAY, 0xff, 120 },
+	/* BK0 */
+	{ ST7701S_CN2BKxSEL, 5, 0x77, 0x01, 0x00, 0x00, 0x10 },
+	{ ST7701S_LNESET, 2, 0x63, 0x00 },
+	{ ST7701S_PORCTRL, 2, 0x11, 0x02 },
+	{ ST7701S_INVSET, 2, 0x31, 0x03 },
+	{ 0xCC, 1, 0x10 },
+	{ ST7701S_PVGAMCTRL, 16, 0x40, 0x01, 0x46, 0x0D, 0x13, 0x09, 0x05, 0x09,
+				 0x09, 0x1B, 0x07, 0x15, 0x12, 0x4C, 0x10, 0xC8 },
+	{ ST7701S_NVGAMCTRL, 16, 0x40, 0x02, 0x86, 0x0D, 0x13, 0x09, 0x05, 0x09,
+				 0x09, 0x1F, 0x07, 0x15, 0x12, 0x15, 0x19, 0x08 },
+	/* BK1 */
+	{ ST7701S_CN2BKxSEL, 5, 0x77, 0x01, 0x00, 0x00, 0x11 },
+	{ ST7701S_VRHS, 1, 0x50 },
+	{ ST7701S_VCOM, 1, 0x68 },
+	{ ST7701S_VGHSS, 1, 0x07 },
+	{ ST7701S_TESTCMD, 1, 0x80 },
+	{ ST7701S_VGLS, 1, 0x47 },
+	{ ST7701S_PWCTRL1, 1, 0x85 },
+	{ ST7701S_PWCTRL2, 1, 0x21 },
+	{ ST7701S_PWCTRL3, 1, 0x10 },
+	{ ST7701S_SPD1, 2, 0x21, 0x36 },
+	{ ST7701S_SPD2, 1, 0x78 },
+	{ ST7701S_MIPISET1, 1, 0x88 },
+	{ ST7701S_DELAY, 0xff, 100 },
+	/* Gate timing (GIP) */
+	{ 0xE0, 3, 0x00, 0x00, 0x02 },
+	{ 0xE1, 11, 0x08, 0x00, 0x0A, 0x00, 0x07, 0x00, 0x09, 0x00, 0x00, 0x33, 0x33 },
+	{ 0xE2, 13, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 },
+	{ 0xE3, 4, 0x00, 0x00, 0x33, 0x33 },
+	{ 0xE4, 2, 0x44, 0x44 },
+	{ 0xE5, 16, 0x0E, 0x2D, 0xA0, 0xA0, 0x10, 0x2D, 0xA0, 0xA0,
+		    0x0A, 0x2D, 0xA0, 0xA0, 0x0C, 0x2D, 0xA0, 0xA0 },
+	{ 0xE6, 4, 0x00, 0x00, 0x33, 0x33 },
+	{ 0xE7, 2, 0x44, 0x44 },
+	{ 0xE8, 16, 0x0D, 0x2D, 0xA0, 0xA0, 0x0F, 0x2D, 0xA0, 0xA0,
+		    0x09, 0x2D, 0xA0, 0xA0, 0x0B, 0x2D, 0xA0, 0xA0 },
+	{ 0xEB, 7, 0x02, 0x01, 0xE4, 0xE4, 0x44, 0x00, 0x40 },
+	{ 0xEC, 2, 0x02, 0x01 },
+	{ 0xED, 16, 0xAB, 0x89, 0x76, 0x54, 0x01, 0xFF, 0xFF, 0xFF,
+		    0xFF, 0xFF, 0xFF, 0x10, 0x45, 0x67, 0x98, 0xBA },
+	/* back to the command set */
+	{ ST7701S_CN2BKxSEL, 5, 0x77, 0x01, 0x00, 0x00, 0x00 },
+	{ ST7701S_DELAY, 0xff, 10 },
+	{ ST7701S_COLMOD, 1, 0x77 },
+	{ ST7701S_DISPON, 0 },
 };
 
 
@@ -131,7 +195,7 @@ static inline struct jlt4013a *panel_to_jlt4013a(struct drm_panel *panel)
 
 static int jlt4013a_prepare(struct drm_panel *panel)
 {
-	int ret;
+	int ret, i, j;
 	struct jlt4013a *ctx = panel_to_jlt4013a(panel);
 
 	mutex_lock(&ctx->lock);
@@ -155,263 +219,20 @@ static int jlt4013a_prepare(struct drm_panel *panel)
 	msleep(120); // Sleep mandated by the datasheet
 	pr_info("Jinglitai JLT4013A: Panel is reset\n");
 
-	/* Initialization routine */
+	/* Initialization routine: Xiegu's (jlt4013a_init_seq) */
 	pr_info("Jinglitai JLT4013A: Doing the initialization routine\n");
 
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_SLPOUT));
-	msleep(120);
+	for (i = 0; i < ARRAY_SIZE(jlt4013a_init_seq); i++) {
+		const u8 *c = jlt4013a_init_seq[i];
 
-	/* BK0 */
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_CN2BKxSEL));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x77));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x01));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x10));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_PORCTRL));
-	ST7701S_TRY(ret, st7701s_write_data(ctx,
-		jlt4013a_default_display_mode.vtotal
-		- jlt4013a_default_display_mode.vsync_end));  // mode.vtotal - mode.vsync_end
-	ST7701S_TRY(ret, st7701s_write_data(ctx,
-		jlt4013a_default_display_mode.vsync_start
-		- jlt4013a_default_display_mode.vdisplay));  // mode.vsync_start - mode.vdisplay
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_INVSET));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x31));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x03));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xC3));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x02));  // DataPolarity: negative (The data is input on the negative edge of DOTCLK)
-	ST7701S_TRY(ret, st7701s_write_data(ctx,
-		jlt4013a_default_display_mode.htotal
-		- jlt4013a_default_display_mode.hsync_end));  // HBP = mode.htotal - mode.hsync_end
-	ST7701S_TRY(ret, st7701s_write_data(ctx,
-		jlt4013a_default_display_mode.vsync_start
-		- jlt4013a_default_display_mode.vdisplay));  // VBP = mode.vsync_start - mode.vdisplay
-
-	/* Something strange */
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xCC));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x10));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_PVGAMCTRL));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x40));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xC9));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x90));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0D));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0F));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x04));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x07));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x07));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x1C));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x04));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x52));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0F));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xDF));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x26));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xCF));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_NVGAMCTRL));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x40));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xC9));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xCF));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0C));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x90));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x04));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x07));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x08));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x1B));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x06));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x55));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x13));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x62));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xE7));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xCF));
-
-	/* BK1 */
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_CN2BKxSEL));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x77));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x01));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x11));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_VRHS));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x5B));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_VCOM));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x68));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_VGHSS));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x07));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_TESTCMD));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x80));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_VGLS));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x47));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_PWCTRL1));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x85));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_PWCTRL2));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x21));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_PWCTRL3));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x10));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_SPD1));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x21));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x36));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_SPD2));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x78));
-
-	msleep(120);
-
-	/* Something strange */
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xE0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x02));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xE1));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x08));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0A));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x07));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x09));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x33));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x33));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xE2));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xE3));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x33));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x33));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xE4));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x44));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x44));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xE5));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0E));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x2D));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x10));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x2D));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0A));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x2D));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0C));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x2D));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xE6));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x33));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x33));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xE7));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x44));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x44));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xE8));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0D));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x2D));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0F));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x2D));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x09));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x2D));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x0B));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x2D));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xA0));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xEB));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x02));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x01));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xE4));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xE4));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x44));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x40));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xEC));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x02));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x01));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, 0xED));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xAB));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x89));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x76));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x54));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x01));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xFF));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xFF));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xFF));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xFF));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xFF));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xFF));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x10));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x45));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x67));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x98));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0xBA));
-
-	/* BK disable */
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_CN2BKxSEL));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x77));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x01));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x00));
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_COLMOD));
-	ST7701S_TRY(ret, st7701s_write_data(ctx, 0x77));
-
-
-	ST7701S_TRY(ret, st7701s_write_command(ctx, ST7701S_DISPON));
-
-	msleep(120);
+		if (c[0] == ST7701S_DELAY && c[1] == 0xff) {
+			msleep(c[2]);
+			continue;
+		}
+		ST7701S_TRY(ret, st7701s_write_command(ctx, c[0]));
+		for (j = 0; j < c[1]; j++)
+			ST7701S_TRY(ret, st7701s_write_data(ctx, c[2 + j]));
+	}
 
 	pr_info("Jinglitai JLT4013A: Panel is initialized\n");
 
@@ -436,7 +257,8 @@ static int jlt4013a_get_modes(struct drm_panel *panel,
 			      struct drm_connector *connector)
 {
 	static const u32 bus_format = MEDIA_BUS_FMT_RGB888_1X24;
-	static const u32 bus_flags = DRM_BUS_FLAG_PIXDATA_SAMPLE_NEGEDGE;
+	/* Xiegu's: data driven on the falling edge, sampled on the rising one (RGBCTRL default) */
+	static const u32 bus_flags = DRM_BUS_FLAG_PIXDATA_DRIVE_NEGEDGE;
 
 
 	struct drm_display_mode *mode = drm_mode_duplicate(
